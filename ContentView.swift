@@ -1,73 +1,57 @@
 //
 //  ContentView.swift
-//  
+//
 //
 //  Created by Salvatore Arpaia on 07/11/25.
 //
 
 import SwiftUI
-import MapKit // Per la mappa
-import ContactsUI // Per selezionare i contatti
-import AVFoundation // Per la finta chiamata
+import MapKit
+import Contacts
+import ContactsUI
+import AVFoundation
 
 // MARK: - 1. Vista Principale (Contenitore)
 
 struct ContentView: View {
     
-    // Stato per la scheda attiva (Mappa o Contatti)
     @State private var selectedTab: Tab = .map
-    
-    // Stati per nascondere la Tab Bar
     @State private var isSearchingMap = false
     @State private var isAddingContact = false
-    
-    // Stato per mostrare la finta chiamata
     @State private var isFakeCallActive = false
-    
-    // Stato per mostrare le impostazioni
     @State private var showSettings = false
 
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
-                
-                // --- CONTENUTO PRINCIPALE ---
-                // Cambia la vista in base alla scheda selezionata
                 VStack {
                     if selectedTab == .map {
-                        // Passiamo il binding per la ricerca
                         MapView(isSearching: $isSearchingMap)
                     } else {
-                        // Passiamo il binding per l'aggiunta di contatti
                         ContactsView(isAddingContact: $isAddingContact, showSettings: $showSettings)
                     }
                 }
-                .edgesIgnoringSafeArea(isSearchingMap ? .all : .bottom) // La mappa/ricerca va a schermo intero
+                .ignoresSafeArea(.container, edges: isSearchingMap ? .all : .bottom)
                 
-                // --- TAB BAR PERSONALIZZATA ---
-                // Mostra la barra solo se non stiamo cercando o aggiungendo un contatto
                 if !isSearchingMap && !isAddingContact {
                     CustomTabBar(
                         selectedTab: $selectedTab,
                         onFakeCall: { isFakeCallActive = true },
                         onSearch: { isSearchingMap = true }
                     )
-                    .transition(.move(edge: .bottom).combined(with: .opacity)) // Animazione
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
-        // Modale a schermo intero per la finta chiamata
         .fullScreenCover(isPresented: $isFakeCallActive) {
             FakeCallView()
         }
-        // Modale per le impostazioni
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
     }
 }
 
-// Enum per le schede
 enum Tab {
     case map
     case contacts
@@ -83,17 +67,15 @@ struct CustomTabBar: View {
     
     var body: some View {
         HStack(spacing: 0) {
-            // 1. Tasto Fake Call
             Button(action: onFakeCall) {
                 Image(systemName: "phone.arrow.down.left.fill")
                     .font(.title2)
                     .frame(width: 60, height: 60)
             }
-            .foregroundStyle(.red) // Colore per il tasto fake call
+            .foregroundStyle(.red)
             
             Spacer()
             
-            // 2. Tasto Mappa (Principale)
             Button(action: { selectedTab = .map }) {
                 Image(systemName: "map.fill")
                     .font(.title2)
@@ -103,7 +85,6 @@ struct CustomTabBar: View {
             
             Spacer(minLength: 12)
             
-            // 3. Tasto Contatti
             Button(action: { selectedTab = .contacts }) {
                 Image(systemName: "person.2.fill")
                     .font(.title2)
@@ -113,7 +94,6 @@ struct CustomTabBar: View {
             
             Spacer()
             
-            // 4. Tasto Search
             Button(action: onSearch) {
                 Image(systemName: "magnifyingglass")
                     .font(.title2)
@@ -122,140 +102,270 @@ struct CustomTabBar: View {
             .foregroundStyle(.gray)
         }
         .padding(.horizontal, 20)
-        .background(
-            // --- Effetto "Liquid Glass" ---
-            .ultraThinMaterial
-        )
+        .background(.ultraThinMaterial)
         .clipShape(Capsule())
         .padding(.horizontal, 25)
-        .padding(.bottom, 5) // Spaziatura dal fondo
-        .animation(.spring(), value: selectedTab) // Animazione
+        .padding(.bottom, 5)
+        .animation(.spring(), value: selectedTab)
     }
 }
 
-// MARK: - 3. Vista Mappa e Logica di Ricerca (CORRETTA per iOS 17+)
+// MARK: - 3. Location Manager (referenced here; implementation in separate file)
+
+// NOTE: Questo tipo è richiesto dal refactor. Verrà fornito in LocationManager.swift.
+// class LocationManager: NSObject, ObservableObject { ... }
+
+// MARK: - 4. Vista Mappa con ricerca e navigazione
 
 struct MapView: View {
     @Binding var isSearching: Bool
     @State private var searchText = ""
     
-    // Usiamo `position` per iOS 17+
-    @State private var position: MapCameraPosition = .region(MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 40.8518, longitude: 14.2681), // Esempio: Napoli
-        span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
-    ))
+    @StateObject private var locationManager = LocationManager()
     
-    // Per gestire la tastiera
+    @State private var position: MapCameraPosition = .automatic
+    @State private var userTrackingEnabled = true
+    @State private var route: MKRoute?
+    @State private var routePolyline: MKPolyline?
+    @State private var searchResults: [MKMapItem] = []
+    @State private var selectedDestination: MKMapItem?
+    
     @FocusState private var isSearchFieldFocused: Bool
-
+    
     var body: some View {
         ZStack(alignment: .top) {
-            // Mappa
-            Map(position: $position)
-                .edgesIgnoringSafeArea(.top)
-                .onTapGesture {
-                    // Chiudi la tastiera se tocchi la mappa
-                    isSearchFieldFocused = false
-                }
-            
-            // --- UI di RICERCA (mostrata solo se isSearching è true) ---
-            if isSearching {
-                VStack(spacing: 0) {
-                    // Sfondo per la barra di stato
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .frame(height: 40) // Altezza approssimativa safe area
-                    
-                    // Barra di ricerca
-                    HStack {
-                        TextField("Dove vuoi andare?", text: $searchText)
-                            .padding(10)
-                            .background(.regularMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .focused($isSearchFieldFocused) // Collega il focus
-                            .padding(.leading)
-                        
-                        Button("Annulla") {
-                            isSearching = false // Nasconde la UI di ricerca
-                            isSearchFieldFocused = false // Nasconde la tastiera
-                            searchText = ""
-                        }
-                        .padding(.trailing)
-                    }
-                    .padding(.vertical)
-                    .background(.ultraThinMaterial)
-                    
-                    // --- Logica di Avvio ---
-                    // (Questa è una simulazione)
-                    if !searchText.isEmpty {
-                        Button("Avvia Navigazione per: \(searchText)") {
-                            // 1. Qui calcoleresti il percorso (con MKDirections)
-                            // 2. Otterresti la ETA (Estimated Time of Arrival)
-                            let etaInSeconds: TimeInterval = 60 // Simula 1 minuto
-                            
-                            // 3. Avvia la logica di monitoraggio
-                            startMonitoring(destination: searchText, eta: etaInSeconds)
-                            
-                            // 4. Chiudi la ricerca
-                            isSearching = false
-                            isSearchFieldFocused = false
-                        }
-                        .padding()
-                        .background(.blue)
-                        .foregroundColor(.white)
-                        .clipShape(Capsule())
-                        .padding()
-                        
-                        Spacer()
-                    } else {
-                         Spacer()
+            mapLayer
+                .ignoresSafeArea()
+                .onChange(of: locationManager.authorizationStatus) { _, new in
+                    if new == .authorizedAlways || new == .authorizedWhenInUse {
+                        centerOnUser(animated: false)
                     }
                 }
                 .onAppear {
-                    // Apri la tastiera automatically
-                    isSearchFieldFocused = true
+                    locationManager.requestWhenInUse()
+                }
+            
+            if isSearching {
+                searchOverlay
+            } else {
+                topControls
+            }
+        }
+        .task(id: selectedDestination) {
+            // Quando scegli una destinazione, calcola il percorso
+            guard let dest = selectedDestination else { return }
+            await calculateRoute(to: dest)
+        }
+    }
+    
+    private var mapLayer: some View {
+        Map(position: $position, selection: .constant(nil)) {
+            if let routePolyline {
+                MapPolyline(routePolyline)
+                    .stroke(.blue, lineWidth: 5)
+            }
+            if let userCoord = locationManager.lastLocation?.coordinate {
+                // User annotation
+                Annotation("Tu", coordinate: userCoord) {
+                    ZStack {
+                        Circle().fill(.blue).frame(width: 12, height: 12)
+                        Circle().stroke(.white, lineWidth: 2).frame(width: 18, height: 18)
+                    }
+                }
+            }
+            ForEach(searchResults, id: \.self) { item in
+                if let coord = item.placemark.location?.coordinate {
+                    Marker(item.name ?? "Destinazione", coordinate: coord)
                 }
             }
         }
-    }
-    
-    // --- FUNZIONE CHIAVE: Monitoraggio Arrivo ---
-    func startMonitoring(destination: String, eta: TimeInterval) {
-        print("Monitoraggio avviato verso \(destination). Arrivo previsto tra \(eta) secondi.")
-        
-        // Simula il timer
-        // In un'app reale:
-        // 1. Chiederesti i permessi per la Localizzazione in Background.
-        // 2. Imposteresti un timer (o un Geofence sulla destinazione).
-        // 3. Se il timer scade e la posizione non è la destinazione...
-        // 4. ...invia un avviso ai contatti fidati (via SMS, Push, etc.)
-        
-        Timer.scheduledTimer(withTimeInterval: eta, repeats: false) { _ in
-            // ** LOGICA DI CONTROLLO **
-            // Esempio: if !userIsAtDestination() {
-                sendAlertToTrustedContacts(destination: destination)
-            // }
+        .mapControls {
+            if userTrackingEnabled {
+                MapUserLocationButton()
+            }
+            MapCompass()
+            MapScaleView()
         }
     }
     
-    func sendAlertToTrustedContacts(destination: String) {
-        // Qui invieresti l'avviso.
-        // Esempio: "Avviso da BODYGUARD: [Tuo Nome] non è ancora arrivato/a a [Destinazione]. Potrebbe aver bisogno di aiuto."
+    private var searchOverlay: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .frame(height: 40)
+            
+            HStack(spacing: 8) {
+                TextField("Dove vuoi andare?", text: $searchText)
+                    .padding(10)
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .focused($isSearchFieldFocused)
+                
+                Button("Annulla") {
+                    dismissSearchUI()
+                }
+                .padding(.trailing)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            
+            if !searchText.isEmpty {
+                resultsList
+            } else {
+                Spacer()
+            }
+        }
+        .onAppear {
+            isSearchFieldFocused = true
+        }
+    }
+    
+    private var resultsList: some View {
+        List {
+            Section("Risultati") {
+                ForEach(searchResults, id: \.self) { item in
+                    Button {
+                        selectedDestination = item
+                        dismissSearchUI()
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text(item.name ?? "Senza nome").font(.headline)
+                            Text(item.placemark.title ?? "")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .task(id: searchText) {
+            await performSearch(query: searchText)
+        }
+    }
+    
+    private var topControls: some View {
+        HStack {
+            Spacer()
+            VStack(spacing: 8) {
+                Button {
+                    centerOnUser(animated: true)
+                } label: {
+                    Image(systemName: "location.fill")
+                        .padding(10)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                }
+                if route != nil {
+                    Button(role: .destructive) {
+                        clearRoute()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .padding(10)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                }
+            }
+            .padding(.top, 12)
+            .padding(.trailing, 12)
+        }
+    }
+    
+    private func dismissSearchUI() {
+        isSearching = false
+        isSearchFieldFocused = false
+    }
+    
+    private func centerOnUser(animated: Bool) {
+        guard let coord = locationManager.lastLocation?.coordinate else { return }
+        let region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.015, longitudeDelta: 0.015))
+        withAnimation(animated ? .easeInOut : nil) {
+            position = .region(region)
+        }
+    }
+    
+    private func clearRoute() {
+        route = nil
+        routePolyline = nil
+        selectedDestination = nil
+    }
+    
+    private func performSearch(query: String) async {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            searchResults = []
+            return
+        }
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        if let coord = locationManager.lastLocation?.coordinate {
+            request.region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.2, longitudeDelta: 0.2))
+        }
+        let search = MKLocalSearch(request: request)
+        do {
+            let response = try await search.start()
+            await MainActor.run {
+                searchResults = response.mapItems
+            }
+        } catch {
+            print("Errore ricerca: \(error)")
+            await MainActor.run { searchResults = [] }
+        }
+    }
+    
+    private func calculateRoute(to destination: MKMapItem) async {
+        guard let userLocation = locationManager.lastLocation else { return }
+        let source = MKMapItem(placemark: MKPlacemark(coordinate: userLocation.coordinate))
+        let request = MKDirections.Request()
+        request.source = source
+        request.destination = destination
+        request.transportType = .automobile
+        
+        let directions = MKDirections(request: request)
+        do {
+            let response = try await directions.calculate()
+            guard let first = response.routes.first else { return }
+            await MainActor.run {
+                route = first
+                routePolyline = first.polyline
+                // Zoom per mostrare tutta la rotta
+                let rect = first.polyline.boundingMapRect
+                let region = MKCoordinateRegion(rect)
+                position = .region(region)
+                // Avvia monitoraggio ETA semplificato
+                startMonitoring(destinationName: destination.name ?? "Destinazione", eta: first.expectedTravelTime)
+            }
+        } catch {
+            print("Errore calcolo percorso: \(error)")
+        }
+    }
+    
+    // Monitoraggio arrivo semplificato
+    private func startMonitoring(destinationName: String, eta: TimeInterval) {
+        print("Monitoraggio avviato verso \(destinationName). ETA: \(Int(eta))s")
+        Timer.scheduledTimer(withTimeInterval: min(eta, 120), repeats: false) { _ in
+            // Esempio: se non hai logica di arrivo, invia avviso
+            sendAlertToTrustedContacts(destination: destinationName)
+        }
+    }
+    
+    private func sendAlertToTrustedContacts(destination: String) {
         print("AVVISO INVIATO! L'utente non è arrivato a \(destination) in tempo.")
+        // Qui integrerai SMS/Push/Server
     }
 }
 
-// MARK: - 4. Vista Contatti e Selezione
+// MARK: - 5. Vista Contatti con gestione permessi
 
 struct ContactsView: View {
     @Binding var isAddingContact: Bool
     @Binding var showSettings: Bool
     
-    // Qui salveresti i contatti scelti
     @State private var trustedContacts: [CNContact] = []
-    
-    // Stato per mostrare il selettore
     @State private var showContactPicker = false
+    @State private var contactsAccessDenied = false
     
     var body: some View {
         VStack {
@@ -271,17 +381,27 @@ struct ContactsView: View {
             }
             .padding()
 
-            // Elenco dei contatti salvati
             List {
-                ForEach(trustedContacts, id: \.identifier) { contact in
-                    Text("\(contact.givenName) \(contact.familyName)")
+                if trustedContacts.isEmpty {
+                    Text("Nessun contatto fidato. Aggiungine uno con il pulsante qui sotto.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(trustedContacts, id: \.identifier) { contact in
+                        Text("\(contact.givenName) \(contact.familyName)")
+                    }
+                    .onDelete(perform: deleteContact)
                 }
-                .onDelete(perform: deleteContact)
+            }
+            
+            if contactsAccessDenied {
+                Text("Accesso ai contatti negato. Vai in Impostazioni per abilitarlo.")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal)
             }
             
             Button(action: {
-                isAddingContact = true // Nasconde la tab bar
-                showContactPicker = true // Apre il selettore
+                Task { await requestContactsAndShowPicker() }
             }) {
                 HStack {
                     Image(systemName: "plus.circle.fill")
@@ -295,12 +415,10 @@ struct ContactsView: View {
                 .padding()
             }
         }
-        // Il selettore di contatti (richiede UIKit)
         .sheet(isPresented: $showContactPicker, onDismiss: {
-            isAddingContact = false // Riemostra la tab bar quando chiuso
+            isAddingContact = false
         }) {
             ContactPickerView(onContactSelected: { contact in
-                // Aggiungi il contatto alla lista
                 if !trustedContacts.contains(where: { $0.identifier == contact.identifier }) {
                     trustedContacts.append(contact)
                 }
@@ -311,9 +429,35 @@ struct ContactsView: View {
     func deleteContact(at offsets: IndexSet) {
         trustedContacts.remove(atOffsets: offsets)
     }
+    
+    private func requestContactsAndShowPicker() async {
+        let store = CNContactStore()
+        let status = CNContactStore.authorizationStatus(for: .contacts)
+        switch status {
+        case .authorized:
+            isAddingContact = true
+            showContactPicker = true
+            contactsAccessDenied = false
+        case .notDetermined:
+            do {
+                try await store.requestAccess(for: .contacts)
+                await MainActor.run {
+                    isAddingContact = true
+                    showContactPicker = true
+                    contactsAccessDenied = false
+                }
+            } catch {
+                await MainActor.run { contactsAccessDenied = true }
+            }
+        case .denied, .restricted:
+            contactsAccessDenied = true
+        @unknown default:
+            contactsAccessDenied = true
+        }
+    }
 }
 
-// MARK: - 5. Selettore Contatti (UIKit Bridge)
+// MARK: - 6. Selettore Contatti (UIKit Bridge)
 
 struct ContactPickerView: UIViewControllerRepresentable {
     
@@ -338,29 +482,24 @@ struct ContactPickerView: UIViewControllerRepresentable {
             self.parent = parent
         }
         
-        // Chiamato quando un contatto viene selezionato
         func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
             parent.onContactSelected(contact)
         }
     }
 }
 
-
-// MARK: - 6. Vista Finta Chiamata
+// MARK: - 7. Vista Finta Chiamata
 
 struct FakeCallView: View {
-    // Carica il nome dalle impostazioni
     @AppStorage("fakeCallName") private var fakeCallName = "Sconosciuto"
-    
     @Environment(\.dismiss) var dismiss
     
-    // Per gestire l'audio
     @State private var audioPlayer: AVAudioPlayer?
     @State private var callStatus = "Chiamata in arrivo..."
     
     var body: some View {
         ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
+            Color.black.ignoresSafeArea()
             
             VStack(spacing: 20) {
                 Text(fakeCallName)
@@ -375,10 +514,9 @@ struct FakeCallView: View {
                 
                 Spacer()
                 
-                // Pulsanti di fine chiamata
                 Button(action: {
-                    audioPlayer?.stop() // Ferma l'audio
-                    dismiss() // Chiude la vista
+                    audioPlayer?.stop()
+                    dismiss()
                 }) {
                     Image(systemName: "phone.down.fill")
                         .font(.largeTitle)
@@ -391,48 +529,33 @@ struct FakeCallView: View {
             }
         }
         .onAppear {
-            // Logica della chiamata
             playRingAndRecording()
         }
     }
     
     func playRingAndRecording() {
-        // --- 1. Simula 3 secondi di squillo ---
         callStatus = "Squillo..."
-        
-        // (Qui potresti riprodurre un file "ringtone.mp3")
-        // Per semplicità, usiamo un timer
-        
         Task {
-            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000) // 3 secondi
-            
-            // --- 2. Avvia la registrazione personalizzata ---
+            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
             callStatus = "Connesso"
-            
-            // Prova a caricare e riprodurre la registrazione
-            // (Assicurati di avere un file "recording.m4a" nel tuo progetto)
-            if let path = Bundle.main.path(forResource: "recording", ofType: "m4a") {
-                do {
-                    // Configura la sessione audio per riprodurre in modalità altoparlante (come una chiamata)
-                    try AVAudioSession.sharedInstance().setCategory(.playback, mode: .voiceCall)
-                    try AVAudioSession.sharedInstance().setActive(true)
-                    
-                    audioPlayer = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
-                    audioPlayer?.play()
-                } catch {
-                    print("Errore nel caricare la registrazione: \(error.localizedDescription)")
-                    callStatus = "Errore audio"
-                }
-            } else {
-                print("File 'recording.m4a' non trovato.")
+            guard let path = Bundle.main.path(forResource: "recording", ofType: "m4a") else {
                 callStatus = "File audio non trovato"
+                return
+            }
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .voiceCall)
+                try AVAudioSession.sharedInstance().setActive(true)
+                audioPlayer = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+                audioPlayer?.play()
+            } catch {
+                print("Errore nel caricare la registrazione: \(error.localizedDescription)")
+                callStatus = "Errore audio"
             }
         }
     }
 }
 
-
-// MARK: - 7. Vista Impostazioni
+// MARK: - 8. Vista Impostazioni
 
 struct SettingsView: View {
     @AppStorage("fakeCallName") private var fakeCallName = "Sconosciuto"
@@ -445,7 +568,7 @@ struct SettingsView: View {
                     TextField("Nome chiamante", text: $fakeCallName)
                     
                     Button("Registra Audio Personalizzato") {
-                        // In un'app reale, qui avvieresti AVAudioRecorder
+                        // Placeholder: implementare AVAudioRecorder se necessario
                         print("Avvio registrazione...")
                     }
                 }
