@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 4E9F059D2EBE452E00C952E8 /* Build configuration list for PBXProject "BodyGuard" */;
+			buildConfigurationList = 4E9F059D2EBE452E00C952E8 /* Build configuration list for PBXProject "bodyguard" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -313,7 +313,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		4E9F059D2EBE452E00C952E8 /* Build configuration list for PBXProject "BodyGuard" */ = {
+		4E9F059D2EBE452E00C952E8 /* Build configuration list for PBXProject "bodyguard" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				4E9F05AB2EBE452F00C952E8 /* Debug */,

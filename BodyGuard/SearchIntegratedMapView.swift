@@ -32,6 +32,9 @@ struct SearchIntegratedMapView: View {
 
     @EnvironmentObject private var routeManager: RouteManager
 
+    // Keyboard safe-area height (iOS 17+). > 0 means keyboard is up.
+    @State private var keyboardHeight: CGFloat = 0
+
     var body: some View {
         ZStack(alignment: .bottom) {
             // Main map
@@ -63,47 +66,26 @@ struct SearchIntegratedMapView: View {
             }
             .ignoresSafeArea()
 
+            // Bottom overlay: exit button + transport + navigation panel
             VStack(spacing: 10) {
-                // Suggestions list (driven by the TabView search field)
-                if !suggestions.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(suggestions, id: \.self) { item in
-                            Button {
-                                selectSuggestionAndCenter(item)
-                            } label: {
-                                HStack(alignment: .top, spacing: 12) {
-                                    Image(systemName: "mappin.circle.fill")
-                                        .foregroundColor(.blue)
-                                        .font(.title3)
-                                        .padding(.top, 2)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.name ?? "Unknown")
-                                            .font(.body)
-                                            .foregroundColor(.primary)
-                                            .lineLimit(1)
-
-                                        Text(suggestedAddress(for: item))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                                .padding(.horizontal)
-                                .padding(.vertical, 10)
-                            }
-                            .buttonStyle(.plain)
-
-                            Divider()
-                                .padding(.leading, 52)
+                // Exit navigation button (visible only while a route exists)
+                if routeManager.route != nil {
+                    HStack {
+                        Spacer()
+                        Button {
+                            exitNavigation()
+                        } label: {
+                            Label("Exit", systemImage: "xmark.circle.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Capsule())
                         }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal)
                     }
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
-                    .padding(.horizontal)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
 
                 // Transport control + start button (visible after a destination and route exist)
@@ -127,27 +109,146 @@ struct SearchIntegratedMapView: View {
                             .padding(.horizontal)
                     }
                 }
+
+                // Pannello compatto: mostra solo distanza + ETA; tap per espandere i passi
+                if routeManager.route != nil {
+                    NavigationPanelView()
+                        .environmentObject(routeManager)
+                        .padding(.horizontal)
+                }
             }
             .padding(.bottom, 8)
+        }
+        // TOP inset: render suggestions above the search bar so they are visible and tappable.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                if !suggestions.isEmpty {
+                    // Add a small spacer to sit just below the search pill
+                    Color.clear.frame(height: 8)
+
+                    // The suggestions container itself
+                    suggestionsContainer
+                        .padding(.horizontal)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                } else {
+                    EmptyView()
+                }
+            }
+            .padding(.top, 0)
         }
         // React to the TabView’s search text changes (no internal TextField here)
         .onChange(of: searchText) { _, newValue in
             performSearchDebounced(newValue)
         }
-        // If you want an initial search on appear when searchText is not empty
-        .task(id: searchText) {
-            // Optional immediate search; debounced search already handles typing
-            // Uncomment to trigger immediately:
-            // if !searchText.isEmpty { searchNearbyPlaces(query: searchText) }
+        // Aggiornamento live distanza/ETA
+        .onReceive(locationManager.$region) { newRegion in
+            routeManager.updateDistanceAndETA(from: newRegion.center)
+        }
+        // Read keyboard safe-area inset to know when the keyboard is up (kept if you want to adapt further)
+        .keyboardInsetReader { inset in
+            keyboardHeight = inset
         }
     }
 }
 
 // MARK: - Helpers
 private extension SearchIntegratedMapView {
+    // Exit navigation: clear route, clear destination, clear search text, dismiss keyboard, and re-center on user
+    func exitNavigation() {
+        routeManager.clearRoute()
+        selectedDestination = nil
+        searchText = ""            // clear the TabView’s search field
+        suggestions.removeAll()
+        cameraPosition = .region(locationManager.region)
+
+        // Dismiss the keyboard
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+    }
+
+    // Approximate row height: icon + vertical paddings + text
+    var rowHeight: CGFloat { 56 }
+
+    // A container that adapts its height:
+    // - 1–2 results: size to content (no ScrollView, no max cap)
+    // - 3+ results: scrollable with a max height cap
+    @ViewBuilder
+    var suggestionsContainer: some View {
+        let count = suggestions.count
+
+        if count <= 2 {
+            // Non-scrollable, height fits exactly the visible rows
+            VStack(spacing: 0) {
+                // Internal top padding to keep first row away from the rounded edge
+                VStack(spacing: 0) {
+                    ForEach(suggestions, id: \.self) { item in
+                        suggestionRow(for: item)
+                        if item != suggestions.last {
+                            Divider().padding(.leading, 52)
+                        }
+                    }
+                }
+                .padding(.top, 6)
+            }
+            .frame(height: rowHeight * CGFloat(count) + 6) // account for internal top padding
+            .background(.thinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+        } else {
+            // Scrollable with a max height so it doesn't reach under the search field
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Internal top padding for better tap area away from the top edge
+                    VStack(spacing: 0) {
+                        ForEach(suggestions, id: \.self) { item in
+                            suggestionRow(for: item)
+                            Divider().padding(.leading, 52)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            }
+            .frame(maxHeight: UIScreen.main.bounds.height * 0.35)
+            .background(.thinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+        }
+    }
+
+    @ViewBuilder
+    func suggestionRow(for item: MKMapItem) -> some View {
+        Button {
+            selectSuggestionAndCenter(item)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "mappin.circle.fill")
+                    .foregroundColor(.blue)
+                    .font(.title3)
+                    .padding(.top, 2)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name ?? "Unknown")
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+
+                    Text(suggestedAddress(for: item))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            .frame(height: rowHeight, alignment: .center)
+        }
+        .buttonStyle(.plain)
+    }
+
     func suggestedAddress(for item: MKMapItem) -> String {
         if #available(iOS 26.0, *) {
-            // Prefer newer address representations if available
             if let reps = (item as AnyObject).value(forKey: "addressRepresentations") as? [String],
                let best = reps.first, !best.isEmpty {
                 return best
@@ -201,7 +302,6 @@ private extension SearchIntegratedMapView {
     func selectSuggestionAndCenter(_ item: MKMapItem) {
         selectedDestination = item
         suggestions.removeAll()
-        // Reset to default transport on new selection (similar to Apple Maps)
         if selectedTransportUI != .automobile {
             selectedTransportUI = .automobile
         }
@@ -220,10 +320,7 @@ private extension SearchIntegratedMapView {
     }
 
     func calculateRoute(to destination: MKMapItem) {
-        // Use the current center from your LocationManager as the source
         let userCoordinate = locationManager.region.center
-
-        // Delegate to RouteManager
         routeManager.calculateRoute(
             from: userCoordinate,
             to: destination,
@@ -260,9 +357,36 @@ private extension SearchIntegratedMapView {
     }
 }
 
+// MARK: - Keyboard inset reader
+private struct KeyboardInsetReader: ViewModifier {
+    let onChange: (CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { report(from: proxy) }
+                        .onChange(of: proxy.safeAreaInsets) { _, _ in
+                            report(from: proxy)
+                        }
+                }
+            )
+    }
+
+    private func report(from proxy: GeometryProxy) {
+        // Bottom safe area includes keyboard height when the keyboard is visible.
+        onChange(proxy.safeAreaInsets.bottom)
+    }
+}
+
+private extension View {
+    func keyboardInsetReader(_ onChange: @escaping (CGFloat) -> Void) -> some View {
+        modifier(KeyboardInsetReader(onChange: onChange))
+    }
+}
+
 #Preview {
-    // Preview with a constant binding
     SearchIntegratedMapView(searchText: .constant("Roma"))
         .environmentObject(RouteManager())
 }
-
