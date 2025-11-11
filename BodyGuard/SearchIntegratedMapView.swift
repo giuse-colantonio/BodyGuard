@@ -66,7 +66,6 @@ struct SearchIntegratedMapView: View {
                     HStack {
                         Spacer()
                         Button {
-                            // Chiudi la tastiera prima di mostrare l'overlay
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                           to: nil, from: nil, for: nil)
                             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
@@ -86,14 +85,14 @@ struct SearchIntegratedMapView: View {
                     .padding()
                     Spacer()
                 }
-                .ignoresSafeArea(.keyboard) // Ignora i cambiamenti della tastiera
+                .ignoresSafeArea(.keyboard)
             }
 
             // Bottom controls
             VStack(spacing: 10) {
                 if selectedDestination != nil {
 
-                    // Exit button (visibile solo se la rotta è stata avviata)
+                    // Exit button
                     if routeStarted {
                         HStack {
                             Spacer()
@@ -112,21 +111,18 @@ struct SearchIntegratedMapView: View {
                         .padding(.horizontal)
                     }
 
-                    // Transport control (On car / On foot)
+                    // Transport control
                     transportControl
 
-                    // Start route button (solo se non si è ancora avviata la rotta)
+                    // Start route button
                     if !routeStarted {
                         Button {
-                            // Chiudi la tastiera
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                           to: nil, from: nil, for: nil)
                             
                             routeStarted = true
                             if let dest = selectedDestination {
                                 calculateRoute(to: dest)
-                                let rect = routeManager.route?.polyline.boundingMapRect ?? MKMapRect()
-                                cameraPosition = .rect(rect)
                             }
                         } label: {
                             Text("Start route")
@@ -140,7 +136,7 @@ struct SearchIntegratedMapView: View {
                         }
                     }
 
-                    // Compact navigation panel (solo se la rotta è avviata)
+                    // Compact navigation panel
                     if routeStarted, routeManager.route != nil {
                         NavigationPanelView()
                             .environmentObject(routeManager)
@@ -149,7 +145,6 @@ struct SearchIntegratedMapView: View {
                 }
             }
             .padding(.bottom, 8)
-
 
             // Empathic Info Overlay
             EmpathicInfoOverlay(isPresented: $showEmpathicInfo)
@@ -170,6 +165,11 @@ struct SearchIntegratedMapView: View {
         .onReceive(locationManager.$region) { newRegion in
             if routeStarted {
                 routeManager.updateDistanceAndETA(from: newRegion.center)
+            }
+        }
+        .onReceive(routeManager.$route) { route in
+            if let route = route, routeStarted {
+                cameraPosition = .rect(route.polyline.boundingMapRect)
             }
         }
         .keyboardInsetReader { inset in
@@ -336,6 +336,7 @@ private extension SearchIntegratedMapView {
             to: destination,
             transport: selectedTransportUI.mkType
         )
+        // Aggiornamento della camera avviene nell'onReceive(routeManager.$route)
     }
 
     var transportControl: some View {
