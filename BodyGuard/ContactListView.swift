@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Contacts
 
 @available(iOS 26.0, *)
 struct ContactsListView: View {
@@ -12,7 +13,7 @@ struct ContactsListView: View {
     ]) private var contacts: [Contact]
 
     @State private var searchText = ""
-    @State private var isAdding = false
+    @State private var showingSystemPicker = false
     @State private var editing: Contact? = nil
     @State private var isEditingSheetPresented = false
 
@@ -27,8 +28,7 @@ struct ContactsListView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(Array(filtered.enumerated()), id: \.element.id) { index, contact in
-                    // Row is a plain view — NOT a Button
+                ForEach(Array(filtered.enumerated()), id: \.element.id) { _, contact in
                     HStack {
                         Circle()
                             .fill(.blue)
@@ -36,17 +36,19 @@ struct ContactsListView: View {
                             .overlay(Text(initials(for: contact)).foregroundColor(.white))
 
                         VStack(alignment: .leading) {
-                            Text(contact.fullName)
+                            Text(contact.fullName.isEmpty ? "Unnamed" : contact.fullName)
                                 .font(.headline)
-                            Text(contact.phoneNumber)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            if !contact.phoneNumber.isEmpty {
+                                Text(contact.phoneNumber)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                     }
-                    .contentShape(Rectangle()) // makes the whole HStack tappable
+                    .contentShape(Rectangle())
                     .onTapGesture {
-                        call(contact.phoneNumber) // tap = call
+                        call(contact.phoneNumber)
                     }
                     .swipeActions(edge: .trailing) {
                         Button {
@@ -63,9 +65,7 @@ struct ContactsListView: View {
                             .foregroundColor(.white)
                         }
 
-
                         Button(role: .destructive) {
-                            // Delete immediately from swipe
                             context.delete(contact)
                             try? context.save()
                         } label: {
@@ -73,7 +73,7 @@ struct ContactsListView: View {
                         }
                     }
                 }
-                .onDelete(perform: deleteAt) // enables EditButton multi-delete
+                .onDelete(perform: deleteAt)
             }
             .navigationTitle("Contacts")
             .searchable(text: $searchText)
@@ -81,33 +81,31 @@ struct ContactsListView: View {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        isAdding = true
+                        showingSystemPicker = true
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel("Import from Apple Contacts")
                 }
             }
-            // Add new contact sheet
-            .sheet(isPresented: $isAdding) {
-                NavigationStack {
-                    ContactFormView { new in
-                        context.insert(new)
-                        try? context.save()
-                        isAdding = false
-                    }
+            // Apple Contacts picker (multi-select)
+            .sheet(isPresented: $showingSystemPicker) {
+                ContactPicker { cnContacts in
+                    importCNContacts(cnContacts)
+                    showingSystemPicker = false
+                } onCancel: {
+                    showingSystemPicker = false
                 }
             }
-            // Edit sheet — controlled explicitly
+            // Edit sheet — mantiene la modifica in‑app dei contatti già importati
             .sheet(isPresented: $isEditingSheetPresented) {
                 if let contactToEdit = editing {
                     NavigationStack {
                         ContactFormView(contact: contactToEdit) { updated in
-                            // copy back changed values to the SwiftData object
                             contactToEdit.firstName = updated.firstName
                             contactToEdit.lastName = updated.lastName
                             contactToEdit.phoneNumber = updated.phoneNumber
                             try? context.save()
-                            // close
                             isEditingSheetPresented = false
                             editing = nil
                         }
@@ -117,14 +115,56 @@ struct ContactsListView: View {
         }
     }
 
+    // MARK: - Import da Apple Contacts
+
+    private func importCNContacts(_ list: [CNContact]) {
+        guard !list.isEmpty else { return }
+
+        for cn in list {
+            let first = cn.givenName
+            let last = cn.familyName
+            guard let phone = preferredPhoneString(from: cn) else { continue }
+
+            // Deduplica semplice: nome + numero (solo cifre)
+            let exists = contacts.contains { c in
+                c.firstName == first &&
+                c.lastName == last &&
+                normalizedDigits(c.phoneNumber) == phone
+            }
+            if exists { continue }
+
+            let new = Contact(firstName: first, lastName: last, phoneNumber: phone)
+            context.insert(new)
+        }
+        try? context.save()
+    }
+
+    private func preferredPhoneString(from cn: CNContact) -> String? {
+        if let mobile = cn.phoneNumbers.first(where: { labelIsMobile($0.label) })?.value.stringValue {
+            return normalizedDigits(mobile)
+        }
+        if let any = cn.phoneNumbers.first?.value.stringValue {
+            return normalizedDigits(any)
+        }
+        return nil
+    }
+
+    private func labelIsMobile(_ label: String?) -> Bool {
+        guard let label else { return false }
+        let l = label.lowercased()
+        return l.contains("mobile") || l.contains("cell") || l.contains("iphone")
+    }
+
+    private func normalizedDigits(_ raw: String) -> String {
+        raw.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+    }
+
     // MARK: - Helpers
 
     private func deleteAt(offsets: IndexSet) {
-        // offsets refer to filtered array indices; map to Contact objects
         for offset in offsets {
             guard offset < filtered.count else { continue }
-            let c = filtered[offset]
-            context.delete(c)
+            context.delete(filtered[offset])
         }
         try? context.save()
     }
@@ -136,7 +176,7 @@ struct ContactsListView: View {
     }
 
     private func call(_ number: String) {
-        let digits = number.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+        let digits = normalizedDigits(number)
         if let url = URL(string: "tel://\(digits)") {
             openURL(url)
         }

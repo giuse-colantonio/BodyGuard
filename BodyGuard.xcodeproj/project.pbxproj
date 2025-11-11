@@ -254,6 +254,7 @@
 				DEVELOPMENT_TEAM = C66QB9SJTA;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSContactsUsageDescription = "We use your contacts so that the apps can send them your position.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "We use your location to show your position on the map and calculate routes to your destination.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -287,6 +288,7 @@
 				DEVELOPMENT_TEAM = C66QB9SJTA;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSContactsUsageDescription = "We use your contacts so that the apps can send them your position.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "We use your location to show your position on the map and calculate routes to your destination.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
