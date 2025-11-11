@@ -6,10 +6,9 @@
 //
 
 import SwiftUI
-
+import SwiftData
 @main
 struct BODYGUARDApp: App {
-    // Shared RouteManager for the whole app
     @StateObject private var routeManager = RouteManager()
 
     var body: some Scene {
@@ -17,12 +16,12 @@ struct BODYGUARDApp: App {
             if #available(iOS 26.0, *) {
                 AppTabContainer()
                     .environmentObject(routeManager)
+                    .modelContainer(for: [Contact.self]) // ✅ Add SwiftData container here
             } else {
-                // Fallback UI if AppTabContainer is iOS 26-only
                 ContentView()
                     .environmentObject(routeManager)
+                    .modelContainer(for: [Contact.self]) // (optional, for older versions)
             }
         }
     }
 }
-
