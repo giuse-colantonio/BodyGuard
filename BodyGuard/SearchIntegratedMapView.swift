@@ -12,34 +12,29 @@ import Combine
 import Contacts
 
 struct SearchIntegratedMapView: View {
-    // Driven by the TabView’s .searchable text
     @Binding var searchText: String
 
-    // Reuse your existing LocationManager (declared in ContentView.swift)
     @StateObject private var locationManager = LocationManager()
     @State private var cameraPosition: MapCameraPosition = .automatic
 
-    // Search and routing state
     @State private var suggestions: [MKMapItem] = []
     @State private var selectedDestination: MKMapItem?
     @State private var debounceCancellable: AnyCancellable?
 
-    // Transport selection (uses your TransportUI.swift enum)
     @State private var selectedTransportUI: TransportUI = .automobile
-
-    // Debounce configuration for search
     private let searchDebounce: TimeInterval = 0.25
 
-    @EnvironmentObject private var routeManager: RouteManager
+    @EnvironmentObject var routeManager: RouteManager
 
-    // Keyboard safe-area height (iOS 17+). > 0 means keyboard is up.
     @State private var keyboardHeight: CGFloat = 0
+    @State private var showEmpathicInfo: Bool = false
+    @State private var routeStarted: Bool = false // track route start
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            // Main map
+            // Map
             Map(position: $cameraPosition) {
-                if let route = routeManager.route {
+                if let route = routeManager.route, routeStarted {
                     MapPolyline(route.polyline)
                         .stroke(.blue, lineWidth: 6)
                 }
@@ -59,92 +54,124 @@ struct SearchIntegratedMapView: View {
                 cameraPosition = .region(locationManager.region)
             }
             .onReceive(locationManager.$region) { newRegion in
-                // Keep camera roughly following the user unless a route zoom is active
-                if selectedDestination == nil {
+                if selectedDestination == nil || !routeStarted {
                     cameraPosition = .region(newRegion)
                 }
             }
             .ignoresSafeArea()
 
-            // Bottom overlay: exit button + transport + navigation panel
-            VStack(spacing: 10) {
-                // Exit navigation button (visible only while a route exists)
-                if routeManager.route != nil {
+            // Top-right recommended safety button
+            if selectedDestination != nil {
+                VStack {
                     HStack {
                         Spacer()
                         Button {
-                            exitNavigation()
+                            // Chiudi la tastiera prima di mostrare l'overlay
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                          to: nil, from: nil, for: nil)
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                showEmpathicInfo.toggle()
+                            }
                         } label: {
-                            Label("Exit", systemImage: "xmark.circle.fill")
+                            Label("Recommended for your safety", systemImage: "heart.text.square.fill")
                                 .font(.subheadline.weight(.semibold))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                                 .background(.ultraThinMaterial)
                                 .clipShape(Capsule())
+                                .foregroundStyle(.white)
                         }
                         .buttonStyle(.plain)
+                    }
+                    .padding()
+                    Spacer()
+                }
+                .ignoresSafeArea(.keyboard) // Ignora i cambiamenti della tastiera
+            }
+
+            // Bottom controls
+            VStack(spacing: 10) {
+                if selectedDestination != nil {
+
+                    // Exit button (visibile solo se la rotta è stata avviata)
+                    if routeStarted {
+                        HStack {
+                            Spacer()
+                            Button {
+                                exitNavigation()
+                            } label: {
+                                Label("Exit", systemImage: "xmark.circle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                         .padding(.horizontal)
                     }
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
 
-                // Transport control + start button (visible after a destination and route exist)
-                if selectedDestination != nil && routeManager.route != nil {
+                    // Transport control (On car / On foot)
                     transportControl
 
-                    Button {
-                        // Zoom to the full route
-                        if let route = routeManager.route {
-                            let rect = route.polyline.boundingMapRect
-                            cameraPosition = .rect(rect)
+                    // Start route button (solo se non si è ancora avviata la rotta)
+                    if !routeStarted {
+                        Button {
+                            // Chiudi la tastiera
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                          to: nil, from: nil, for: nil)
+                            
+                            routeStarted = true
+                            if let dest = selectedDestination {
+                                calculateRoute(to: dest)
+                                let rect = routeManager.route?.polyline.boundingMapRect ?? MKMapRect()
+                                cameraPosition = .rect(rect)
+                            }
+                        } label: {
+                            Text("Start route")
+                                .font(.headline)
+                                .padding()
+                                .frame(maxWidth: .infinity)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .padding(.horizontal)
                         }
-                    } label: {
-                        Text("Start route")
-                            .font(.headline)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    // Compact navigation panel (solo se la rotta è avviata)
+                    if routeStarted, routeManager.route != nil {
+                        NavigationPanelView()
+                            .environmentObject(routeManager)
                             .padding(.horizontal)
                     }
                 }
-
-                // Pannello compatto: mostra solo distanza + ETA; tap per espandere i passi
-                if routeManager.route != nil {
-                    NavigationPanelView()
-                        .environmentObject(routeManager)
-                        .padding(.horizontal)
-                }
             }
             .padding(.bottom, 8)
+
+
+            // Empathic Info Overlay
+            EmpathicInfoOverlay(isPresented: $showEmpathicInfo)
         }
-        // TOP inset: render suggestions above the search bar so they are visible and tappable.
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if !suggestions.isEmpty {
-                    // Add a small spacer to sit just below the search pill
                     Color.clear.frame(height: 8)
-
-                    // The suggestions container itself
                     suggestionsContainer
                         .padding(.horizontal)
                         .transition(.move(edge: .top).combined(with: .opacity))
-                } else {
-                    EmptyView()
                 }
             }
-            .padding(.top, 0)
         }
-        // React to the TabView’s search text changes (no internal TextField here)
         .onChange(of: searchText) { _, newValue in
             performSearchDebounced(newValue)
         }
-        // Aggiornamento live distanza/ETA
         .onReceive(locationManager.$region) { newRegion in
-            routeManager.updateDistanceAndETA(from: newRegion.center)
+            if routeStarted {
+                routeManager.updateDistanceAndETA(from: newRegion.center)
+            }
         }
-        // Read keyboard safe-area inset to know when the keyboard is up (kept if you want to adapt further)
         .keyboardInsetReader { inset in
             keyboardHeight = inset
         }
@@ -153,52 +180,40 @@ struct SearchIntegratedMapView: View {
 
 // MARK: - Helpers
 private extension SearchIntegratedMapView {
-    // Exit navigation: clear route, clear destination, clear search text, dismiss keyboard, and re-center on user
     func exitNavigation() {
         routeManager.clearRoute()
         selectedDestination = nil
-        searchText = ""            // clear the TabView’s search field
+        searchText = ""
         suggestions.removeAll()
         cameraPosition = .region(locationManager.region)
+        routeStarted = false
 
-        // Dismiss the keyboard
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                         to: nil, from: nil, for: nil)
     }
 
-    // Approximate row height: icon + vertical paddings + text
     var rowHeight: CGFloat { 56 }
 
-    // A container that adapts its height:
-    // - 1–2 results: size to content (no ScrollView, no max cap)
-    // - 3+ results: scrollable with a max height cap
     @ViewBuilder
     var suggestionsContainer: some View {
         let count = suggestions.count
-
         if count <= 2 {
-            // Non-scrollable, height fits exactly the visible rows
             VStack(spacing: 0) {
-                // Internal top padding to keep first row away from the rounded edge
                 VStack(spacing: 0) {
                     ForEach(suggestions, id: \.self) { item in
                         suggestionRow(for: item)
-                        if item != suggestions.last {
-                            Divider().padding(.leading, 52)
-                        }
+                        if item != suggestions.last { Divider().padding(.leading, 52) }
                     }
                 }
                 .padding(.top, 6)
             }
-            .frame(height: rowHeight * CGFloat(count) + 6) // account for internal top padding
+            .frame(height: rowHeight * CGFloat(count) + 6)
             .background(.thinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
         } else {
-            // Scrollable with a max height so it doesn't reach under the search field
             ScrollView {
                 VStack(spacing: 0) {
-                    // Internal top padding for better tap area away from the top edge
                     VStack(spacing: 0) {
                         ForEach(suggestions, id: \.self) { item in
                             suggestionRow(for: item)
@@ -258,7 +273,6 @@ private extension SearchIntegratedMapView {
             let pm = item.placemark
             if let postal = pm.postalAddress {
                 let formatter = CNPostalAddressFormatter()
-                formatter.style = .mailingAddress
                 let formatted = formatter.string(from: postal)
                     .replacingOccurrences(of: "\n", with: ", ")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -302,11 +316,7 @@ private extension SearchIntegratedMapView {
     func selectSuggestionAndCenter(_ item: MKMapItem) {
         selectedDestination = item
         suggestions.removeAll()
-        if selectedTransportUI != .automobile {
-            selectedTransportUI = .automobile
-        }
-        calculateRoute(to: item)
-
+        if selectedTransportUI != .automobile { selectedTransportUI = .automobile }
         let coord: CLLocationCoordinate2D = {
             if #available(iOS 26.0, *) {
                 item.location.coordinate
@@ -360,23 +370,16 @@ private extension SearchIntegratedMapView {
 // MARK: - Keyboard inset reader
 private struct KeyboardInsetReader: ViewModifier {
     let onChange: (CGFloat) -> Void
-
     func body(content: Content) -> some View {
-        content
-            .background(
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { report(from: proxy) }
-                        .onChange(of: proxy.safeAreaInsets) { _, _ in
-                            report(from: proxy)
-                        }
-                }
-            )
-    }
-
-    private func report(from proxy: GeometryProxy) {
-        // Bottom safe area includes keyboard height when the keyboard is visible.
-        onChange(proxy.safeAreaInsets.bottom)
+        content.background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { onChange(proxy.safeAreaInsets.bottom) }
+                    .onChange(of: proxy.safeAreaInsets) { _, _ in
+                        onChange(proxy.safeAreaInsets.bottom)
+                    }
+            }
+        )
     }
 }
 
@@ -386,6 +389,51 @@ private extension View {
     }
 }
 
+// MARK: - Empathic Info Overlay
+private struct EmpathicInfoOverlay: View {
+    @Binding var isPresented: Bool
+    var body: some View {
+        if isPresented {
+            ZStack {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.easeInOut) { isPresented = false }
+                    }
+
+                VStack(spacing: 16) {
+                    Image(systemName: "heart.text.square.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.pink)
+
+                    Text("We've chosen this route by analyzing multiple safety factors: lighting, crime risk, weather, and accident history. 💙\n\nOur goal is not just to get you there faster — but to get you there safer.")
+                        .multilineTextAlignment(.center)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal)
+
+                    Button("Got it") {
+                        withAnimation(.spring) { isPresented = false }
+                    }
+                    .font(.headline)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(Color.blue.opacity(0.9))
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+                }
+                .padding(30)
+                .background(.thinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .shadow(radius: 20)
+                .padding(40)
+            }
+            .transition(.opacity.combined(with: .scale))
+        }
+    }
+}
+
+// MARK: - Preview
 #Preview {
     SearchIntegratedMapView(searchText: .constant("Roma"))
         .environmentObject(RouteManager())

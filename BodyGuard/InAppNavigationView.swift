@@ -22,9 +22,24 @@ final class RouteManager: ObservableObject {
     // Apple Maps–like metrics
     @Published var distanceRemaining: CLLocationDistance?
     @Published var etaRemaining: TimeInterval?
+
+    // Safety configuration
+    var safetyWeights = SafetyWeights()
+    var safetyProvider: SafetyDataProvider = SafetyDataProviderMock()
+    var samplingMeters: CLLocationDistance = 150
+    //mark: clear
     
+    func clearRoute() {
+        route = nil
+        steps.removeAll()
+        distanceRemaining = nil
+        etaRemaining = nil
+        isCalculating = false
+        lastError = nil
+    }
+
     // MARK: - Route Calculation
-    /// Calculates a route from the user's location to the selected destination.
+    /// Calculates the safest route (not the fastest) from the user's location to the destination.
     func calculateRoute(from userCoordinate: CLLocationCoordinate2D,
                         to destination: MKMapItem,
                         transport: MKDirectionsTransportType = .automobile) {
@@ -32,8 +47,6 @@ final class RouteManager: ObservableObject {
         lastError = nil
         
         let sourceItem: MKMapItem
-        
-        // New initializer for iOS 26
         if #available(iOS 26.0, *) {
             let userLocation = CLLocation(latitude: userCoordinate.latitude,
                                           longitude: userCoordinate.longitude)
@@ -47,80 +60,104 @@ final class RouteManager: ObservableObject {
         request.source = sourceItem
         request.destination = destination
         request.transportType = transport
-        
+        request.requestsAlternateRoutes = true   // fondamentale: vogliamo più percorsi
+
         let directions = MKDirections(request: request)
         
         Task { @MainActor in
             defer { self.isCalculating = false }
             do {
                 let response = try await directions.calculate()
-                guard let route = response.routes.first else {
-                    self.lastError = NSError(domain: "RouteManager",
-                                             code: 404,
-                                             userInfo: [NSLocalizedDescriptionKey: "No route found."])
-                    self.route = nil
-                    self.steps.removeAll()
-                    self.distanceRemaining = nil
-                    self.etaRemaining = nil
+                let candidates = response.routes
+                guard !candidates.isEmpty else {
+                    self.publishNoRouteFound()
                     return
                 }
-                
-                self.route = route
-                self.steps = route.steps.filter { !$0.instructions.isEmpty }
-                
-                // Impostazione iniziale come Apple Maps
-                self.distanceRemaining = route.distance
-                self.etaRemaining = route.expectedTravelTime
-                
-                print("Route calculated with \(self.steps.count) navigation steps.")
+
+                // Valuta la sicurezza di ogni route e scegli la migliore
+                let scorer = SafetyScorer(provider: safetyProvider,
+                                          weights: safetyWeights,
+                                          sampleDistanceMeters: samplingMeters)
+
+                // Calcolo punteggi in parallelo fuori dal MainActor
+                let scored: [(route: MKRoute, score: Double)] = try await withThrowingTaskGroup(of: (MKRoute, Double).self) { group in
+                    for r in candidates {
+                        group.addTask {
+                            let s = await scorer.score(for: r, transport: transport)
+                            return (r, s)
+                        }
+                    }
+                    var acc: [(MKRoute, Double)] = []
+                    for try await pair in group {
+                        acc.append(pair)
+                    }
+                    return acc
+                }
+
+                // Scegli la route con score più basso (più sicura)
+                guard let best = scored.min(by: { $0.score < $1.score }) else {
+                    self.publishNoRouteFound()
+                    return
+                }
+
+                self.route = best.route
+                self.steps = best.route.steps.filter { !$0.instructions.isEmpty }
+                self.distanceRemaining = best.route.distance
+                self.etaRemaining = best.route.expectedTravelTime
+
+                print("Selected safest route with score \(best.score). Candidates: \(scored.map { $0.score })")
             } catch {
-                self.lastError = error
-                self.route = nil
-                self.steps.removeAll()
-                self.distanceRemaining = nil
-                self.etaRemaining = nil
-                print("Route calculation failed: \(error.localizedDescription)")
+                self.publishError(error)
             }
         }
     }
-      
+
     // MARK: - Live Updates
-    /// Aggiorna distanza residua ed ETA basandosi sulla posizione corrente dell’utente.
-    /// Richiamalo dal tuo LocationManager quando ricevi nuovi aggiornamenti di posizione.
     func updateDistanceAndETA(from userCoordinate: CLLocationCoordinate2D) {
         guard let route = route else {
             distanceRemaining = nil
             etaRemaining = nil
             return
         }
-        
-        // Distanza proiettata sul polyline fino alla fine del percorso
         let remaining = remainingDistance(from: userCoordinate, along: route.polyline)
         distanceRemaining = remaining
-        
-        // Stima ETA: se abbiamo expectedTravelTime e distanza totale, stimiamo velocità media della route
         if route.distance > 0 && route.expectedTravelTime > 0 {
-            let averageSpeed = route.distance / route.expectedTravelTime // m/s
+            let averageSpeed = route.distance / route.expectedTravelTime
             etaRemaining = averageSpeed > 0 ? remaining / averageSpeed : nil
         } else {
             etaRemaining = nil
         }
     }
-    
-    /// Calcola la distanza rimanente proiettando la posizione utente sulla polyline e sommando la lunghezza residua.
+
+    private func publishNoRouteFound() {
+        self.lastError = NSError(domain: "RouteManager",
+                                 code: 404,
+                                 userInfo: [NSLocalizedDescriptionKey: "No route found."])
+        self.route = nil
+        self.steps.removeAll()
+        self.distanceRemaining = nil
+        self.etaRemaining = nil
+    }
+
+    private func publishError(_ error: Error) {
+        self.lastError = error
+        self.route = nil
+        self.steps.removeAll()
+        self.distanceRemaining = nil
+        self.etaRemaining = nil
+        print("Route calculation failed: \(error.localizedDescription)")
+    }
+      
+    // MARK: - Geometry helpers (unchanged)
     private func remainingDistance(from user: CLLocationCoordinate2D, along polyline: MKPolyline) -> CLLocationDistance {
-        // Trova il punto della polyline più vicino alla posizione dell’utente
         let userMapPoint = MKMapPoint(user)
         let nearest = nearestPoint(on: polyline, to: userMapPoint)
-        
-        // Distanza residua: dalla proiezione fino alla fine della polyline
         let total = polyline.length()
         let traveled = distanceAlongPolyline(to: nearest.index, fraction: nearest.fraction, in: polyline)
         let remaining = max(0, total - traveled)
         return remaining
     }
     
-    /// Ritorna l’indice del segmento più vicino e la frazione interna al segmento [0,1] del punto proiettato.
     private func nearestPoint(on polyline: MKPolyline, to point: MKMapPoint) -> (index: Int, fraction: Double) {
         let points = polyline.points()
         let count = polyline.pointCount
@@ -148,35 +185,22 @@ final class RouteManager: ObservableObject {
         return (bestIndex, bestFraction)
     }
     
-    /// Lunghezza dalla testa della polyline fino al punto frazionario dentro al segmento dato.
     private func distanceAlongPolyline(to segmentIndex: Int, fraction: Double, in polyline: MKPolyline) -> CLLocationDistance {
         let points = polyline.points()
         let count = polyline.pointCount
         guard count > 1 else { return 0 }
         
         var sum: CLLocationDistance = 0
-        // Somma segmenti completi prima di segmentIndex
         if segmentIndex > 0 {
             for i in 0..<(segmentIndex) {
                 sum += points[i].distance(to: points[i + 1])
             }
         }
-        // Aggiungi la porzione del segmento corrente
         let a = points[segmentIndex]
         let b = points[min(segmentIndex + 1, count - 1)]
         let segLen = a.distance(to: b)
         sum += segLen * fraction
         return sum
-    }
-    
-    // MARK: - Reset
-    /// Clears the current route and steps.
-    func clearRoute() {
-        route = nil
-        steps.removeAll()
-        lastError = nil
-        distanceRemaining = nil
-        etaRemaining = nil
     }
 }
 
