@@ -16,11 +16,11 @@ struct BODYGUARDApp: App {
             if #available(iOS 26.0, *) {
                 AppTabContainer()
                     .environmentObject(routeManager)
-                    .modelContainer(for: [Contact.self]) // ✅ Add SwiftData container here
+                    .modelContainer(for: [Contact.self])
             } else {
                 ContentView()
                     .environmentObject(routeManager)
-                    .modelContainer(for: [Contact.self]) // (optional, for older versions)
+                    .modelContainer(for: [Contact.self]) 
             }
         }
     }

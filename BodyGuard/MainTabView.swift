@@ -17,17 +17,18 @@ struct AppTabContainer: View {
                 ContentView()
             }
 
-            Tab("Contacts", systemImage: "person.2.fill") {
+            Tab("Safe Contacts", systemImage: "person.2.fill") {
                 NavigationStack {
                                    ContactsListView() // From your SwiftData contacts feature
                                }
             }
 
-            Tab("Profile", systemImage: "person.fill") {
-                Text("Profile Screen")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.systemBackground))
+            Tab("Fake Call", systemImage: "phone.badge.waveform.fill") {
+                NavigationStack {
+                    FakeCallerListView()
+                }
             }
+
 
             Tab(role: .search) {
                 NavigationStack {
