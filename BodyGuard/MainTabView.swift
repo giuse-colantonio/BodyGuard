@@ -5,6 +5,7 @@
 //  Created by AFP Student 33 on 08/11/25.
 //
 import SwiftUI
+import SwiftData
 
 @available(iOS 26.0, *)
 struct AppTabContainer: View {
@@ -16,16 +17,14 @@ struct AppTabContainer: View {
                 ContentView()
             }
 
-            Tab("Teams", systemImage: "person.3.fill") {
-                Text("Teams Screen")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.systemBackground))
+            Tab("Contacts", systemImage: "person.2.fill") {
+                NavigationStack {
+                                   ContactsListView() // From your SwiftData contacts feature
+                               }
             }
 
-            Tab("Profile", systemImage: "person.fill") {
-                Text("Profile Screen")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.systemBackground))
+            Tab("Fake Call", systemImage: "phone.badge.waveform.fill") {
+               FakeCallerListView()
             }
 
             Tab(role: .search) {
