@@ -7,7 +7,7 @@ struct NavigationPanelView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            // Header compatto: distanza + durata + orario di arrivo
+            // Header compatto: distanza + PROSSIMO PASSO ben visibile + orario di arrivo
             header
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -32,17 +32,25 @@ struct NavigationPanelView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 6) {
+                // Distanza rimanente in piccolo
                 Text(distanceText(routeManager.distanceRemaining))
-                    .font(.title3.weight(.semibold))
-                HStack(spacing: 8) {
-                    Text(etaDurationText(routeManager.etaRemaining))
-                    if let arrival = arrivalTimeText(routeManager.etaRemaining) {
-                        Text("• \(arrival)")
-                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                // Prossimo passo: più grande e semibold per massima leggibilità
+                Text(nextStepText())
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.9)
+
+                // Info arrivo in caption
+                if let arrival = arrivalTimeText(routeManager.etaRemaining) {
+                    Text(arrival)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
             Spacer()
             Image(systemName: expanded ? "chevron.down" : "chevron.up")
@@ -104,6 +112,15 @@ struct NavigationPanelView: View {
         }
     }
 
+    // MARK: - Helpers
+    private func nextStepText() -> String {
+        if let first = routeManager.steps.first {
+            let instr = first.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+            return instr.isEmpty ? "Prossimo passo disponibile" : instr
+        }
+        return "Calcolo indicazioni..."
+    }
+
     // MARK: - Formatters
     private func distanceText(_ distance: CLLocationDistance?) -> String {
         guard let d = distance else { return "–" }
@@ -112,22 +129,6 @@ struct NavigationPanelView: View {
         } else {
             let km = d / 1000
             return String(format: "%.1f km", km)
-        }
-    }
-
-    private func etaDurationText(_ eta: TimeInterval?) -> String {
-        guard let t = eta else { return "ETA –" }
-        let minutes = Int((t / 60).rounded())
-        if minutes < 60 {
-            return "ETA \(minutes) min"
-        } else {
-            let hours = minutes / 60
-            let mins = minutes % 60
-            if mins == 0 {
-                return "ETA \(hours) h"
-            } else {
-                return "ETA \(hours) h \(mins) min"
-            }
         }
     }
 

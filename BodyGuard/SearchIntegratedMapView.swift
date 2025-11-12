@@ -60,14 +60,22 @@ struct SearchIntegratedMapView: View {
             }
             .ignoresSafeArea()
 
-            // Top-right recommended safety button
+            // Top overlays: ETA centered above Safety button when destination selected
             if selectedDestination != nil {
-                VStack {
+                VStack(spacing: 8) {
+                    // ETA pill on top, full width from side to side
+                    if routeStarted {
+                        etaPill
+                            .frame(maxWidth: .infinity) // piena larghezza
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
+                    // Safety button aligned to the right
                     HStack {
                         Spacer()
                         Button {
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                          to: nil, from: nil, for: nil)
+                                                            to: nil, from: nil, for: nil)
                             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                                 showEmpathicInfo.toggle()
                             }
@@ -82,14 +90,16 @@ struct SearchIntegratedMapView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding()
+
                     Spacer()
                 }
+                .padding(.top, 12)
+                .padding(.horizontal) // padding laterale della schermata; la pill riempie fino a qui
                 .ignoresSafeArea(.keyboard)
             }
 
             // Bottom controls
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 if selectedDestination != nil {
 
                     // Exit button
@@ -111,14 +121,16 @@ struct SearchIntegratedMapView: View {
                         .padding(.horizontal)
                     }
 
-                    // Transport control
-                    transportControl
+                    // Transport control (hidden once route started)
+                    if !routeStarted {
+                        transportControl
+                    }
 
                     // Start route button
                     if !routeStarted {
                         Button {
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                          to: nil, from: nil, for: nil)
+                                                            to: nil, from: nil, for: nil)
                             
                             routeStarted = true
                             if let dest = selectedDestination {
@@ -136,15 +148,16 @@ struct SearchIntegratedMapView: View {
                         }
                     }
 
-                    // Compact navigation panel
+                    // Compact navigation panel (roomy)
                     if routeStarted, routeManager.route != nil {
                         NavigationPanelView()
                             .environmentObject(routeManager)
                             .padding(.horizontal)
+                            .padding(.vertical, 2)
                     }
                 }
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 10)
 
             // Empathic Info Overlay
             EmpathicInfoOverlay(isPresented: $showEmpathicInfo)
@@ -314,6 +327,10 @@ private extension SearchIntegratedMapView {
     }
 
     func selectSuggestionAndCenter(_ item: MKMapItem) {
+        // Chiudi tastiera quando selezioni una destinazione
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+
         selectedDestination = item
         suggestions.removeAll()
         if selectedTransportUI != .automobile { selectedTransportUI = .automobile }
@@ -365,6 +382,36 @@ private extension SearchIntegratedMapView {
             }
         }
         .padding(.horizontal)
+    }
+
+    var etaPill: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock")
+                .imageScale(.medium)
+            Text(etaDurationText(routeManager.etaRemaining))
+                .font(.body.weight(.semibold))
+        }
+        .frame(maxWidth: .infinity, alignment: .center) // riempi orizzontalmente
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    func etaDurationText(_ eta: TimeInterval?) -> String {
+        guard let t = eta else { return "ETA –" }
+        let minutes = Int((t / 60).rounded())
+        if minutes < 60 {
+            return "ETA \(minutes) min"
+        } else {
+            let hours = minutes / 60
+            let mins = minutes % 60
+            if mins == 0 {
+                return "ETA \(hours) h"
+            } else {
+                return "ETA \(hours) h \(mins) min"
+            }
+        }
     }
 }
 
