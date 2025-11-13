@@ -10,6 +10,8 @@ import MapKit
 import CoreLocation
 import Combine
 import Contacts
+import SwiftData
+import MessageUI
 
 struct SearchIntegratedMapView: View {
     @Binding var searchText: String
@@ -29,6 +31,18 @@ struct SearchIntegratedMapView: View {
     @State private var keyboardHeight: CGFloat = 0
     @State private var showEmpathicInfo: Bool = false
     @State private var routeStarted: Bool = false // track route start
+
+    // Leggi i contatti salvati (useremo tutti i contatti dell’app automaticamente)
+    @Query(sort: [
+        SortDescriptor(\Contact.lastName),
+        SortDescriptor(\Contact.firstName)
+    ]) private var contacts: [Contact]
+
+    // Messaggi (composer)
+    @State private var showMessageComposer = false
+    @State private var messageRecipients: [String] = []
+    @State private var messageBody: String = ""
+    @State private var pendingRouteDestination: MKMapItem? = nil // per avviare il routing dopo il composer
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -60,17 +74,15 @@ struct SearchIntegratedMapView: View {
             }
             .ignoresSafeArea()
 
-            // Top overlays: ETA centered above Safety button when destination selected
+            // Top overlays
             if selectedDestination != nil {
                 VStack(spacing: 8) {
-                    // ETA pill on top, full width from side to side
                     if routeStarted {
                         etaPill
-                            .frame(maxWidth: .infinity) // piena larghezza
+                            .frame(maxWidth: .infinity)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                    // Safety button aligned to the right
                     HStack {
                         Spacer()
                         Button {
@@ -94,7 +106,7 @@ struct SearchIntegratedMapView: View {
                     Spacer()
                 }
                 .padding(.top, 12)
-                .padding(.horizontal) // padding laterale della schermata; la pill riempie fino a qui
+                .padding(.horizontal)
                 .ignoresSafeArea(.keyboard)
             }
 
@@ -126,15 +138,46 @@ struct SearchIntegratedMapView: View {
                         transportControl
                     }
 
+                    // Mostra quanti contatti verranno inclusi
+                    if !routeStarted {
+                        Text(recipientsCountText())
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     // Start route button
                     if !routeStarted {
                         Button {
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                             to: nil, from: nil, for: nil)
-                            
-                            routeStarted = true
+
+                            // Prepara messaggio di “check-in” con TUTTI i contatti dell’app (senza filtrare cifre)
                             if let dest = selectedDestination {
-                                calculateRoute(to: dest)
+                                let (recipients, body) = composeCheckInMessageForAllContacts(for: dest)
+                                messageRecipients = recipients
+                                messageBody = body
+                                pendingRouteDestination = dest
+                            } else {
+                                messageRecipients = []
+                                messageBody = ""
+                                pendingRouteDestination = nil
+                            }
+
+                            // Log di debug per verificare destinatari su device
+                            print("Message recipients: \(messageRecipients)")
+
+                            // Apri Messaggi se possibile e se abbiamo destinatari
+                            if MFMessageComposeViewController.canSendText(),
+                               !messageRecipients.isEmpty {
+                                showMessageComposer = true
+                            } else {
+                                // Fallback: avvia direttamente la route
+                                routeStarted = true
+                                if let dest = selectedDestination {
+                                    calculateRoute(to: dest)
+                                }
                             }
                         } label: {
                             Text("Start route")
@@ -146,9 +189,22 @@ struct SearchIntegratedMapView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .padding(.horizontal)
                         }
+                        // Presenta Messaggi
+                        .sheet(isPresented: $showMessageComposer, onDismiss: {
+                            // Dopo la chiusura del composer, avvia la route se avevamo una destinazione
+                            if let dest = pendingRouteDestination {
+                                routeStarted = true
+                                calculateRoute(to: dest)
+                                pendingRouteDestination = nil
+                            }
+                        }) {
+                            MessageComposer(recipients: messageRecipients, bodyText: messageBody) { _ in
+                                // result: .sent, .cancelled, .failed — opzionale da gestire
+                            }
+                        }
                     }
 
-                    // Compact navigation panel (roomy)
+                    // Pannello navigazione
                     if routeStarted, routeManager.route != nil {
                         NavigationPanelView()
                             .environmentObject(routeManager)
@@ -193,6 +249,18 @@ struct SearchIntegratedMapView: View {
 
 // MARK: - Helpers
 private extension SearchIntegratedMapView {
+    func recipientsCountText() -> String {
+        // Conta quanti numeri useremo (accetta qualsiasi stringa non vuota)
+        let count = contacts.filter { !$0.phoneNumber.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty }.count
+        if count == 0 {
+            return "Nessun contatto salvato nell’app"
+        } else if count == 1 {
+            return "Invierai a 1 contatto"
+        } else {
+            return "Invierai a \(count) contatti"
+        }
+    }
+
     func exitNavigation() {
         routeManager.clearRoute()
         selectedDestination = nil
@@ -288,7 +356,7 @@ private extension SearchIntegratedMapView {
                 let formatter = CNPostalAddressFormatter()
                 let formatted = formatter.string(from: postal)
                     .replacingOccurrences(of: "\n", with: ", ")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                 if !formatted.isEmpty { return formatted }
             }
             return pm.title ?? item.name ?? ""
@@ -327,7 +395,6 @@ private extension SearchIntegratedMapView {
     }
 
     func selectSuggestionAndCenter(_ item: MKMapItem) {
-        // Chiudi tastiera quando selezioni una destinazione
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                         to: nil, from: nil, for: nil)
 
@@ -353,7 +420,6 @@ private extension SearchIntegratedMapView {
             to: destination,
             transport: selectedTransportUI.mkType
         )
-        // Aggiornamento della camera avviene nell'onReceive(routeManager.$route)
     }
 
     var transportControl: some View {
@@ -391,7 +457,7 @@ private extension SearchIntegratedMapView {
             Text(etaDurationText(routeManager.etaRemaining))
                 .font(.body.weight(.semibold))
         }
-        .frame(maxWidth: .infinity, alignment: .center) // riempi orizzontalmente
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(.ultraThinMaterial)
@@ -413,11 +479,47 @@ private extension SearchIntegratedMapView {
             }
         }
     }
+
+    // MARK: - Check-in message (tutti i contatti dell’app, senza filtrare cifre)
+    func composeCheckInMessageForAllContacts(for destination: MKMapItem) -> ([String], String) {
+        // Prendi esattamente il valore salvato, purché non sia vuoto
+        let recipients = contacts
+            .map { $0.phoneNumber.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        // Coordinate destinazione
+        let destCoord: CLLocationCoordinate2D = {
+            if #available(iOS 26.0, *) {
+                destination.location.coordinate
+            } else {
+                destination.placemark.location?.coordinate ?? destination.placemark.coordinate
+            }
+        }()
+
+        // Link Apple Maps alla destinazione
+        let mapsLink = "http://maps.apple.com/?daddr=\(destCoord.latitude),\(destCoord.longitude)"
+
+        // Posizione corrente
+        let current = locationManager.region.center
+        let currentStr = "\(String(format: "%.5f", current.latitude)), \(String(format: "%.5f", current.longitude))"
+
+        let destName = destination.name ?? "destination"
+
+        let body =
+        """
+        Check-in: sto iniziando un tragitto verso \(destName).
+        Posizione attuale: \(currentStr)
+        Link Apple Maps: \(mapsLink)
+        """
+
+        return (recipients, body)
+    }
 }
 
-// MARK: - Keyboard inset reader
+// MARK: - Keyboard inset reader (file-scope)
 private struct KeyboardInsetReader: ViewModifier {
     let onChange: (CGFloat) -> Void
+
     func body(content: Content) -> some View {
         content.background(
             GeometryReader { proxy in
@@ -433,11 +535,11 @@ private struct KeyboardInsetReader: ViewModifier {
 
 private extension View {
     func keyboardInsetReader(_ onChange: @escaping (CGFloat) -> Void) -> some View {
-        modifier(KeyboardInsetReader(onChange: onChange))
+        self.modifier(KeyboardInsetReader(onChange: onChange))
     }
 }
 
-// MARK: - Empathic Info Overlay
+// MARK: - Empathic Info Overlay (file-scope)
 private struct EmpathicInfoOverlay: View {
     @Binding var isPresented: Bool
     var body: some View {
