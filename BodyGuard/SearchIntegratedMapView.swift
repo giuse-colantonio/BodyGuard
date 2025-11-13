@@ -153,7 +153,7 @@ struct SearchIntegratedMapView: View {
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                             to: nil, from: nil, for: nil)
 
-                            // Prepara messaggio di “check-in” con TUTTI i contatti dell’app (senza filtrare cifre)
+                            // Prepara messaggio di “check-in” con TUTTI i contatti dell’app (senza toccare i numeri)
                             if let dest = selectedDestination {
                                 let (recipients, body) = composeCheckInMessageForAllContacts(for: dest)
                                 messageRecipients = recipients
@@ -166,6 +166,8 @@ struct SearchIntegratedMapView: View {
                             }
 
                             // Log di debug per verificare destinatari su device
+                            print("canSendText:", MFMessageComposeViewController.canSendText())
+                            print("Message recipients count: \(messageRecipients.count)")
                             print("Message recipients: \(messageRecipients)")
 
                             // Apri Messaggi se possibile e se abbiamo destinatari
@@ -200,6 +202,9 @@ struct SearchIntegratedMapView: View {
                         }) {
                             MessageComposer(recipients: messageRecipients, bodyText: messageBody) { _ in
                                 // result: .sent, .cancelled, .failed — opzionale da gestire
+                            }
+                            .onAppear {
+                                print("MessageComposer presented with recipients: \(messageRecipients)")
                             }
                         }
                     }
@@ -250,8 +255,11 @@ struct SearchIntegratedMapView: View {
 // MARK: - Helpers
 private extension SearchIntegratedMapView {
     func recipientsCountText() -> String {
-        // Conta quanti numeri useremo (accetta qualsiasi stringa non vuota)
-        let count = contacts.filter { !$0.phoneNumber.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty }.count
+        // Conta come validi solo i numeri non vuoti e non composti solo da spazi, senza modificare il contenuto
+        let count = contacts
+            .map { $0.phoneNumber }
+            .filter { !$0.isEmpty && $0.contains(where: { !$0.isWhitespace }) }
+            .count
         if count == 0 {
             return "Nessun contatto salvato nell’app"
         } else if count == 1 {
@@ -480,12 +488,12 @@ private extension SearchIntegratedMapView {
         }
     }
 
-    // MARK: - Check-in message (tutti i contatti dell’app, senza filtrare cifre)
+    // MARK: - Check-in message (tutti i contatti dell’app, senza toccare i numeri)
     func composeCheckInMessageForAllContacts(for destination: MKMapItem) -> ([String], String) {
-        // Prendi esattamente il valore salvato, purché non sia vuoto
+        // Usa esattamente i numeri salvati; escludi solo stringhe vuote o solo whitespace
         let recipients = contacts
-            .map { $0.phoneNumber.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+            .map { $0.phoneNumber }
+            .filter { !$0.isEmpty && $0.contains(where: { !$0.isWhitespace }) }
 
         // Coordinate destinazione
         let destCoord: CLLocationCoordinate2D = {
@@ -496,23 +504,65 @@ private extension SearchIntegratedMapView {
             }
         }()
 
-        // Link Apple Maps alla destinazione
-        let mapsLink = "http://maps.apple.com/?daddr=\(destCoord.latitude),\(destCoord.longitude)"
-
         // Posizione corrente
         let current = locationManager.region.center
-        let currentStr = "\(String(format: "%.5f", current.latitude)), \(String(format: "%.5f", current.longitude))"
+
+        // Link Apple Maps percorso completo: saddr + daddr + dirflg
+        let flag = dirFlag(for: selectedTransportUI)
+        let routeLink = "http://maps.apple.com/?saddr=\(current.latitude),\(current.longitude)&daddr=\(destCoord.latitude),\(destCoord.longitude)&dirflg=\(flag)"
+
+        // Anche link separati (se utile a chi legge)
+        let currentLink = "http://maps.apple.com/?ll=\(current.latitude),\(current.longitude)"
+        let destinationLink = "http://maps.apple.com/?daddr=\(destCoord.latitude),\(destCoord.longitude)"
 
         let destName = destination.name ?? "destination"
+
+        // Info ETA/distanza se disponibili
+        let distanceText: String = {
+            if let d = routeManager.distanceRemaining {
+                if d < 1000 { return "\(Int(d)) m" }
+                return String(format: "%.1f km", d / 1000)
+            }
+            return "–"
+        }()
+        let etaText: String = {
+            if let t = routeManager.etaRemaining {
+                return etaDurationText(t)
+            }
+            return "–"
+        }()
+
+        let currentStr = "\(String(format: "%.5f", current.latitude)), \(String(format: "%.5f", current.longitude))"
+        let destStr = "\(String(format: "%.5f", destCoord.latitude)), \(String(format: "%.5f", destCoord.longitude))"
 
         let body =
         """
         Check-in: sto iniziando un tragitto verso \(destName).
         Posizione attuale: \(currentStr)
-        Link Apple Maps: \(mapsLink)
+        Destinazione: \(destStr)
+
+        Link percorso Apple Maps:
+        \(routeLink)
+
+        Link posizione attuale:
+        \(currentLink)
+
+        Link destinazione:
+        \(destinationLink)
+
+        Distanza rimanente: \(distanceText)
+        \(etaText)
         """
 
         return (recipients, body)
+    }
+
+    // Mappa TransportUI al flag dirflg di Apple Maps
+    func dirFlag(for transport: TransportUI) -> String {
+        switch transport {
+        case .automobile: return "d" // driving
+        case .walking: return "w"    // walking
+        }
     }
 }
 
