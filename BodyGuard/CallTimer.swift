@@ -29,9 +29,11 @@ final class CallTimer: ObservableObject {
 
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in
-                self.elapsed += 1
-            }
+            
+            // --- MODIFICA QUI ---
+            // Non serve il Task { @MainActor... } perché siamo già sul MainActor.
+            self.elapsed += 1
+            // ---------------------
         }
         RunLoop.main.add(timer!, forMode: .common)
     }
